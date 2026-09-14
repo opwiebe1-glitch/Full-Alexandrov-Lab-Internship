@@ -1,0 +1,22 @@
+import os
+import subprocess
+import sys
+num=0
+def traverse_folders(root_dir, beginning, end):
+    global num
+    amount=0
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+            # If there are no subdirectories, it's a leaf folder
+        if not dirnames:
+            if amount>=beginning and amount<= end:
+                # Make path relative to root_dir
+                relative_path = os.path.relpath(dirpath, root_dir)
+                path=(os.path.join(root_dir, relative_path))
+                print(path)
+                #this is the part of the text you would want to change
+                subprocess.run(["sbatch", "vasp.slurm"], cwd=path, check=True, capture_output=True, text=True)
+                num+=1
+            amount+=1
+# Example usage
+#traverse_folders(sys.argv[1], int(sys.argv[2]), int(sys.argv[3]))
+#print(num)
