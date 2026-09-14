@@ -1,0 +1,141 @@
+import os
+import shutil
+import sys
+from itertools import combinations
+import numpy as np
+from ase.build.tools import sort
+from ase.calculators.vasp import Vasp
+from ase.io import read, write
+
+
+# set environment variable for pseudopotentials path
+# pseudopotentials are expected to be in: $VASP_PP_PATH/potpaw_PBE/
+os.environ['VASP_PP_PATH'] = '/home/alexandrov/shared/programs/pseudopotentials/'
+# save current folder path
+home_dir = os.getcwd()
+
+# read dopant species from user input
+dopants = sys.argv[1:]
+# ensure that user specifies 3 dopant species before proceeding
+if len(dopants) != 3:
+    print("Specify 3 dopant species")
+    sys.exit(1)
+
+# read POSCAR templates for OER intermediates
+bare = read("POSCAR-bare", format="vasp")
+O = read("POSCAR-O", format="vasp")
+OH = read("POSCAR-OH", format="vasp")
+OOH = read("POSCAR-OOH", format="vasp")
+poscar_list = [bare, O, OH, OOH]
+folder_list = ["bare", "O", "OH", "OOH"]
+
+# VESTA atom indices for doping sites:  A:19, B:15, C:22, D:18, E:32
+# ASE atom indices start from 0
+indices = [18, 14, 21, 17, 31]
+
+# list combinations of doping sites and species
+indices_combos = list(combinations(indices, 3))
+dopants_combos = []
+workingList = []
+length = 3
+n = len(dopants)
+grid = np.indices((n,) * length).reshape(length, -1).T
+
+dopants_combos = [[dopants[i] for i in row] for row in grid]
+#dopants_combos = [[dopants[0], dopants[1], dopants[2]], [dopants[0], dopants[2], dopants[1]], [dopants[1], dopants[2], dopants[0]], [dopants[1], dopants[0], dopants[2]],[dopants[2], dopants[1], dopants[0]],[dopants[2],dopants[0], dopants[1]]]
+for a in indices_combos:
+    for b in dopants_combos:
+        workingList.append((a, b))
+
+# create a new folder for storing these combinations
+new_file = f"{dopants[0]}{dopants[1]}{dopants[2]}"
+os.makedirs(new_file, exist_ok=True)
+
+
+for (ind, dope) in workingList:
+    # create subfolders for each combination
+    i1, i2, i3 = ind
+    d1, d2, d3 = dope
+    new_subDir = (
+        f"{d1}-{i1+1}_{d2}-{i2+1}_{d3}-{i3+1}"  ## adding +1 to keep it consistent with VESTA
+    )
+    subDir_path = os.path.join(new_file, new_subDir)
+    os.makedirs(subDir_path, exist_ok=True)
+    # for each OER intermediate
+    for poscar_file in poscar_list:
+        # create subfolder
+        poscar_name = folder_list[poscar_list.index(poscar_file)]
+        poscar_subdir = os.path.join(subDir_path, poscar_name)
+        os.makedirs(poscar_subdir, exist_ok=True)
+        # substitute dopant species in POSCAR templates
+        new_atoms = poscar_file.copy()
+        new_atoms[i1].symbol = d1
+        new_atoms[i2].symbol = d2
+        new_atoms[i3].symbol = d3
+        new_atoms = sort(new_atoms)
+        # set initial magnetic moments
+        for atom in new_atoms:
+            if atom.symbol == 'Ni':
+                atom.magmom = 2.0
+            elif atom.symbol == 'Co':
+                atom.magmom = 3.0
+            elif atom.symbol == 'Fe':
+                atom.magmom = 4.0
+            elif atom.symbol == 'Cr':
+                atom.magmom = 5.0
+            elif atom.symbol == 'Ti':
+                atom.magmom = 2.0
+            else:
+                atom.magmom = 0.0
+
+        #  Insert this check here
+        magmoms = new_atoms.get_initial_magnetic_moments()
+        if len(magmoms) != len(new_atoms):
+            print(f" MAGMOM mismatch in {poscar_subdir}: {len(magmoms)} values for {len(new_atoms)} atoms")
+            sys.exit(1)
+        # go to subfolder and write VASP input files
+        os.chdir(poscar_subdir)
+        calc = Vasp(
+            istart=1,
+            icharg=1,
+            xc="PBE",
+            isif=2,
+            ibrion=2,
+            nsw=200,
+            encut=400,
+            algo="Fast",
+            ismear=0,
+            sigma=0.05,
+            ediff=1E-4,
+            ediffg=-0.05,
+            ldipol=True,
+            idipol=3,
+            ispin=2,
+            lorbit=11,
+            # U values taken from ref: https://doi.org/10.1103/PhysRevB.73.195107
+            ldau_luj={
+                'Ni': {'J': 0, 'U': 6.4, 'L': 2},
+                'Co': {'J': 0, 'U': 3.3, 'L': 2},
+                'Fe': {'J': 0, 'U': 4.0, 'L': 2},
+                'Cr': {'J': 0, 'U': 3.5, 'L': 2},
+                'Ti': {'J': 0, 'U': 0, 'L': -1},
+                'O': {'J': 0, 'U': 0, 'L': -1},
+                'H': {'J': 0, 'U': 0, 'L': -1},
+            },
+            ldauprint=1,
+            npar=8,
+            lplane=True,
+            lscalu=False,
+            nsim=32,
+            lreal="Auto",
+            kpts=(3,3,1),
+            gamma=False,
+        )
+        calc.atoms=new_atoms
+        calc.initialize(new_atoms)
+        calc.write_input(new_atoms)
+        os.chdir(home_dir)
+        # copy slurm job script
+        source_file = "run.slurm"
+        destination_file = os.path.join(poscar_subdir, "vasp.slurm")
+        shutil.copyfile(source_file, destination_file)
