@@ -1,0 +1,75 @@
+from ase.io import read, write
+from itertools import combinations
+import sys
+import os
+from ase.build.tools import sort
+
+
+dopants=[sys.argv[1],sys.argv[2]]
+#this makes a list of all the POSCAR files, so you need them in the folder you are running this in please
+poscar_list=[]
+
+#create a poscar list, where bare, O, OH, and OOH are so in your file creation you can make a new atoms for each
+
+bare=read('POSCAR-bare', format='vasp')
+O=read('POSCAR-O', format='vasp')
+OH=read('POSCAR-OH', format='vasp')
+OOH=read('POSCAR-OOH', format='vasp')
+poscar_list=[bare, O, OH, OOH]
+poscar_list2=["bare", "O", "OH", "OOH"]
+
+#A:19
+#B:15
+#C:22
+#D:18
+#E:32
+indices=[19,15,22,18,32]
+#this will create a list of all possible pairs of indices and dopants, it's rreally long though
+
+indices_combos = list(combinations(indices, 2))
+
+#making empty lists
+dopants_combos=[]
+workingList=[]
+
+#creates all possible combos of the two dopants we want, as well as leaving one blank(if this is too many possibilities let me know)
+for a in dopants:
+        for b in dopants:
+                if a=="" and b=="":
+                        continue
+                dopants_combos.append((a,b))
+
+for a in indices_combos:
+        for b in dopants_combos:
+                workingList.append((a,b))
+
+print(workingList)
+#now I am creating all of the files
+#Destination file
+new_file=f"{dopants[0]}{dopants[1]}"
+os.makedirs(new_file, exist_ok=True)
+
+#creates a new folder named after the position of each dopant
+for (ind, dope) in workingList:
+        i1, i2 = ind
+        d1, d2 = dope
+        new_subDir=f"{d1}-{i1}_{d2}-{i2}"
+        subDir_path=os.path.join(new_file, new_subDir)
+        os.makedirs(subDir_path, exist_ok=True)
+#this creates each intermediate POSCAR file
+        for poscar_file in poscar_list:
+                new_atoms=poscar_file.copy()
+                new_atoms[i1].symbol=d1
+                new_atoms[i2].symbol=d2
+                new_atoms=sort(new_atoms)
+
+                # Create second-level subdirectory named after poscar_fil
+                poscar_name = poscar_list2[poscar_list.index(poscar_file)]
+                poscar_subdir = os.path.join(subDir_path, poscar_name)
+                os.makedirs(poscar_subdir, exist_ok=True)
+
+        # Define full path to POSCAR file
+                filename = os.path.join(poscar_subdir, "POSCAR")
+
+        # Write the modified POSCAR
+                write(filename, new_atoms, format="vasp")
