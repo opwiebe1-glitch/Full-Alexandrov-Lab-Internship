@@ -1,0 +1,94 @@
+import os
+import subprocess
+import sys
+num=0
+runAgain=[]
+import shutil
+
+def checkOut(path):
+    #this function intakes a full file path, adds the out file to the end, then returns a boolean whether or not the out file has converged
+    with open(os.path.join(path, "out"), "r") as f:
+        for line in f:
+            if "reached required" in line:
+                return True
+    return False
+
+def read_last_E0(filepath, run):
+    last_E0 = None
+    global runAgain
+    if checkOut(filepath):
+        with open(os.path.join(filepath, "OSZICAR"), "r") as f:
+            for line in f:
+                if "E0" in line:
+                    # Split by spaces, find the token after "E0="
+                    parts = line.strip().split()
+                    for i, token in enumerate(parts):
+                        if token.startswith("E0="):
+                            # Handle both "E0=" and "E0= -10.123"
+                            if token == "E0=" and i + 1 < len(parts):
+                                last_E0 = float(parts[i + 1])
+                            else:
+                                last_E0 = float(token.replace("E0=", ""))
+
+        return last_E0
+    elif run:
+        print(f"{filepath} didn't converge")
+        replaceFiles(filepath)
+        subprocess.run(["sbatch", "vasp.slurm"], cwd=filepath, check=True, capture_output=True, text=True)
+        return "Didn't converge"
+    else:
+        return "Didn't converge"
+
+
+def listDG(path):
+    #this function needs to intake a coordinate file- like Fe-15_Cu-22-then goes through each subDirectory, runs checkOut, then returns them as a list
+    bare=read_last_E0(os.path.join(path, "bare"), True)
+    O=read_last_E0(os.path.join(path, "O"), True)
+    OH=read_last_E0(os.path.join(path, "OH"), True)
+    OOH=read_last_E0(os.path.join(path, "OOH"), True)
+    if all(isinstance(x, float) for x in (bare, O, OH, OOH)):
+        DG1=OH-bare+(-3.39)-(-14.14)
+        DG2=O-OH+(-3.39)
+        DG3=OOH-O+(-3.39)-(-14.14)
+        DG4=4.92-(DG1+DG2+DG3)
+        S=stabilityCalc(sys.argv[1], path)
+        return [path, DG1, DG2, DG3, DG4, max(DG1, DG2, DG3, DG4)-1.23, S]
+    else:
+        pass
+
+#Ef=E(bare here) - minimum E bare
+def stabilityCalc(input, current):
+    minimum=100000000
+    #this function intakes the current directory, traverses it to find the minimum bare final energy level, then substracts it from the current file's bare energy level to find the difference, determining the stability of that dopant position combination
+    for name in os.listdir(input):
+        full_path=os.path.join(input, name)
+        bare_energy=read_last_E0(os.path.join(full_path, "bare"), False)
+        if (isinstance(bare_energy, float) and bare_energy<minimum):
+            minimum=bare_energy
+    current_energy = read_last_E0(os.path.join(current, "bare"), False)
+    if isinstance(current_energy, float):
+        return current_energy-minimum
+    else:
+        return None
+
+
+def makeDatFile(filename, list):
+    #this function writes a dat file goes through the D1D2 file, lists out the file's name, does the math for it's four values, then lists them out, then calculates V(see paper)
+    coordinates=os.path.basename(list[0])
+    DG1, DG2, DG3, DG4, max, S = list[1:]
+    with open(f"{filename}.dat", "a") as f:
+        f.write(f"{coordinates}\t{DG1:.6f}\t{DG2:.6f}\t{DG3:.6f}\t{DG4:.6f}\t{max:.6f}\t{S:.6f}\n")
+
+def traverse(root_dir):
+    for name in os.listdir(root_dir):
+        full_path=os.path.join(root_dir, name)
+        if listDG(full_path) is not None:
+            makeDatFile(f"{root_dir}", listDG(full_path))
+            #makeDatFile("FeCu", listDG(full_path))
+
+def replaceFiles(path):
+    CONTpath=os.path.join(path, "CONTCAR")
+    POSCpath=os.path.join(path, "POSCAR")
+    shutil.copy(CONTpath, POSCpath)
+
+traverse(sys.argv[1])
